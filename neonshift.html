@@ -6,7 +6,7 @@
 <title>Neon Shift</title>
 
 <!-- Yandex Games SDK v2 -->
-<script src="https://yandex.ru/games/sdk/v2"></script>
+<script src="/sdk.js"></script>
 
 <style>
   * { 
@@ -70,6 +70,12 @@
   .combo-badge.active {
     opacity: 1;
     transform: scale(1.1);
+  }
+  .lives-display {
+    font-size: 18px;
+    letter-spacing: 3px;
+    margin-top: 4px;
+    text-shadow: 0 0 8px rgba(255,0,106,0.6);
   }
   .gems-box {
     display: inline-flex;
@@ -175,7 +181,7 @@
     background: radial-gradient(circle at center, rgba(14,14,28,0.94) 0%, rgba(5,5,10,0.98) 100%); 
     z-index: 15; 
     backdrop-filter: blur(10px); 
-    transition: opacity 0.2s ease; 
+    transition: opacity 0.2s ease;
     padding: 24px;
   }
   #shop-modal, #tutorial-modal { z-index: 25; display: none; }
@@ -337,6 +343,7 @@
     <div id="score" class="score-val">0</div>
     <div id="best" class="score-sub">HI: 0</div>
     <div id="combo-display" class="combo-badge">COMBO x1</div>
+    <div id="lives-display" class="lives-display"></div>
   </div>
   <div class="gems-box" style="margin-right: 54px;">
     <span>💎</span>
@@ -440,7 +447,7 @@
 
 <script>
 /* =========================================================================
-   ARMAZENAMENTO SEGURO
+   ARMAZENAMENTO SEGURO (localStorage pode ser bloqueado em iframes)
    ========================================================================= */
 const store = (() => {
   let ls = null;
@@ -466,24 +473,24 @@ const canvas = document.getElementById('c'),
       ctx = canvas.getContext('2d', { alpha: false }), 
       scoreEl = document.getElementById('score'), 
       bestEl = document.getElementById('best'), 
-      comboEl = document.getElementById('combo-display'), 
+      comboEl = document.getElementById('combo-display'),
       gemsEl = document.getElementById('gems-count'), 
-      shopGemsEl = document.getElementById('shop-gems-count'), 
-      nextRewardEl = document.getElementById('next-reward'), 
+      shopGemsEl = document.getElementById('shop-gems-count'),
+      nextRewardEl = document.getElementById('next-reward'),
       ui = document.getElementById('ui'), 
       uiTitle = document.getElementById('ui-title'), 
       btnPlay = document.getElementById('btn-play'), 
-      btnRevive = document.getElementById('btn-revive'), 
+      btnRevive = document.getElementById('btn-revive'),
       btnOpenShop = document.getElementById('btn-open-shop'), 
-      btnCloseShop = document.getElementById('btn-close-shop'), 
+      btnCloseShop = document.getElementById('btn-close-shop'),
       shopModal = document.getElementById('shop-modal'), 
-      btnOpenTutorial = document.getElementById('btn-open-tutorial'), 
-      btnCloseTutorial = document.getElementById('btn-close-tutorial'), 
-      tutorialModal = document.getElementById('tutorial-modal'), 
-      pauseModal = document.getElementById('pause-modal'), 
-      skinsContainer = document.getElementById('skins-container'), 
-      muteBtn = document.getElementById('mute-btn'), 
-      touchHint = document.getElementById('touch-shift-hint'), 
+      btnOpenTutorial = document.getElementById('btn-open-tutorial'),
+      btnCloseTutorial = document.getElementById('btn-close-tutorial'),
+      tutorialModal = document.getElementById('tutorial-modal'),
+      pauseModal = document.getElementById('pause-modal'),
+      skinsContainer = document.getElementById('skins-container'),
+      muteBtn = document.getElementById('mute-btn'),
+      touchHint = document.getElementById('touch-shift-hint'),
       powerupBarsContainer = document.getElementById('powerup-bars');
 
 let W = Math.max(1, window.innerWidth), H = Math.max(1, window.innerHeight), dpr = 1;
@@ -497,6 +504,16 @@ let paused = false;
 let hasRevived = false;
 let roundsPlayed = 0;
 let starting = false;
+let sdkReady = false;
+
+// Sistema de vidas: cada partida (e cada revive) começa com MAX_LIVES vidas
+const MAX_LIVES = 3;
+let lives = MAX_LIVES;
+const livesEl = document.getElementById('lives-display');
+function updateLivesUI() {
+  livesEl.innerText = '❤️'.repeat(Math.max(0, lives)) + '🖤'.repeat(Math.max(0, MAX_LIVES - lives));
+}
+updateLivesUI();
 
 // Combo System
 let comboCount = 0;
@@ -514,6 +531,7 @@ const activePowerups = {
 
 let lastTime = performance.now();
 
+// Espaçamento calculado dinamicamente (o iframe pode mudar de tamanho)
 function obsSpacing() { return Math.max(340, H * 0.45); }
 
 const colorA = '#00f0ff';
@@ -590,6 +608,7 @@ function resize(){
     touchHint.style.display = 'block';
   }
 
+  // Reposiciona a nave ao redimensionar / girar a tela
   if (player) {
     const b = player.r + 8;
     player.y = H * 0.82;
@@ -601,6 +620,7 @@ window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 150));
 resize();
 
+// Evita menu de contexto, zoom por gesto e scroll acidental dentro do iframe
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 
@@ -760,58 +780,117 @@ muteBtn.onclick = (e) => {
 };
 
 /* =========================================================================
-   YANDEX GAMES SDK INTEGRATION
+   YANDEX GAMES SDK
+   O jogo continua funcionando se o SDK não carregar (modo standalone),
+   mas nesse caso NÃO existe revive (sem anúncio, sem revive).
    ========================================================================= */
 let ysdk = null;
+let gameplayActive = false;
 
+// Coloque true SOMENTE para testar o fluxo de revive fora da Yandex.
+// Lembre de voltar para false antes de enviar o build.
+const DEBUG_NO_SDK = false;
+
+function gameplayStart() {
+  if (gameplayActive) return;
+  gameplayActive = true;
+  try { ysdk && ysdk.features && ysdk.features.GameplayAPI && ysdk.features.GameplayAPI.start(); } catch (e) {}
+}
+
+function gameplayStop() {
+  if (!gameplayActive) return;
+  gameplayActive = false;
+  try { ysdk && ysdk.features && ysdk.features.GameplayAPI && ysdk.features.GameplayAPI.stop(); } catch (e) {}
+}
+
+// Chamado quando um anúncio abre/fecha: silencia e pausa o jogo
 function adStart() {
   isAdPlaying = true;
   pauseAudio();
+  gameplayStop();
 }
 
 function adEnd() {
   isAdPlaying = false;
   resumeAudio();
   lastTime = performance.now();
+  if (!over && !paused) gameplayStart();
 }
 
-function initYandexSDK() {
+function onSdkReady() {
+  if (sdkReady) return;
+  sdkReady = true;
+  btnPlay.disabled = false;
+  btnPlay.innerText = roundsPlayed > 0 ? 'PLAY AGAIN' : 'PLAY';
+}
+
+// Diagnóstico: abra o jogo com ?sdkdebug na URL para ver o status na tela
+const SDK_DEBUG = /[?&]sdkdebug/.test(location.search);
+let sdkDebugEl = null;
+function sdkLog(msg) {
+  console.log('[YSDK] ' + msg);
+  if (!SDK_DEBUG) return;
+  if (!sdkDebugEl) {
+    sdkDebugEl = document.createElement('div');
+    sdkDebugEl.style.cssText = 'position:absolute;left:8px;bottom:8px;max-width:90%;z-index:99;font:11px/1.4 monospace;color:#0f0;background:rgba(0,0,0,.75);padding:6px 8px;border-radius:6px;pointer-events:none;white-space:pre-wrap';
+    document.body.appendChild(sdkDebugEl);
+  }
+  sdkDebugEl.textContent += msg + '\n';
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function initYandexSDK() {
   btnPlay.disabled = true;
   btnPlay.innerText = 'LOADING...';
 
-  const readyFallback = () => {
-    btnPlay.disabled = false;
-    btnPlay.innerText = roundsPlayed > 0 ? 'PLAY AGAIN' : 'PLAY';
-  };
+  // Garantia: nunca deixa o jogador preso na tela de loading
+  setTimeout(onSdkReady, 4000);
 
-  // Garante que o jogo não trave mesmo se o SDK não carregar em 4s
-  const timeoutId = setTimeout(readyFallback, 4000);
+  sdkLog('host: ' + location.href);
+  sdkLog('in iframe: ' + (window.self !== window.top));
+
+  // 1) /sdk.js (servido pela Yandex). Se não existir (teste local),
+  // 2) tenta o endereço absoluto oficial para hospedagem própria.
+  if (typeof YaGames === 'undefined') {
+    sdkLog('/sdk.js nao carregou, tentando sdk.games.s3.yandex.net...');
+    try {
+      await loadScript('https://sdk.games.s3.yandex.net/sdk.js');
+    } catch (e) {
+      sdkLog('falha ao baixar o SDK (rede/bloqueio)');
+    }
+  }
 
   if (typeof YaGames === 'undefined') {
-    console.warn('Yandex Games SDK não detectado. Modo standalone ativo.');
-    readyFallback();
+    sdkLog('YaGames indefinido: modo standalone (sem anuncios)');
+    onSdkReady();
     return;
   }
 
-  YaGames.init()
-    .then(_ysdk => {
-      clearTimeout(timeoutId);
-      ysdk = _ysdk;
-      // Notifica o Yandex que o jogo terminou de carregar
-      if (ysdk.features && ysdk.features.LoadingAPI) {
-        ysdk.features.LoadingAPI.ready();
-      }
-      readyFallback();
-    })
-    .catch(err => {
-      console.error('Falha ao inicializar Yandex Games SDK:', err);
-      clearTimeout(timeoutId);
-      readyFallback();
-    });
+  sdkLog('YaGames encontrado, chamando init()...');
+  try {
+    ysdk = await YaGames.init();
+    sdkLog('SDK inicializado. adv: ' + !!ysdk.adv + ' | rewarded: ' + (typeof ysdk.adv?.showRewardedVideo));
+
+    try { ysdk.on('game_api_pause', () => { pauseGame(); }); } catch (e) {}
+    try { if (ysdk.features && ysdk.features.LoadingAPI) ysdk.features.LoadingAPI.ready(); } catch (e) {}
+  } catch (err) {
+    sdkLog('init() falhou: ' + (err && err.message ? err.message : err));
+    console.error('Falha ao inicializar o Yandex Games SDK:', err);
+  }
+  onSdkReady();
 }
 initYandexSDK();
 
-// Anúncio Intersticial (Fullscreen)
+// Anúncio intersticial (entre partidas). Sempre resolve, mesmo com erro/adblock.
 function showYandexFullscreenAdv() {
   return new Promise((resolve) => {
     if (!ysdk || !ysdk.adv || typeof ysdk.adv.showFullscreenAdv !== 'function') {
@@ -830,8 +909,9 @@ function showYandexFullscreenAdv() {
       ysdk.adv.showFullscreenAdv({
         callbacks: {
           onOpen: () => adStart(),
-          onClose: (wasShown) => finish(),
-          onError: (error) => finish()
+          onClose: () => finish(),   // também é chamado se a Yandex decidiu não exibir
+          onError: () => finish(),
+          onOffline: () => finish()
         }
       });
     } catch (e) {
@@ -840,48 +920,55 @@ function showYandexFullscreenAdv() {
   });
 }
 
-// Anúncio Recompensado (Rewarded Video)
-function showYandexRewardedVideo(onRewardedCallback) {
+// O botão de revive só existe se o anúncio recompensado for possível
+function canShowRewarded() {
+  return !!(ysdk && ysdk.adv && typeof ysdk.adv.showRewardedVideo === 'function') || DEBUG_NO_SDK;
+}
+
+// Anúncio recompensado: a recompensa só é entregue depois que o anúncio FECHA
+// e somente se o jogador realmente assistiu (onRewarded disparou).
+function showYandexRewardedVideo(onReward, onFail) {
   if (!ysdk || !ysdk.adv || typeof ysdk.adv.showRewardedVideo !== 'function') {
-    // Se estiver fora do Yandex/sem SDK, revive diretamente para testes
-    onRewardedCallback();
+    if (DEBUG_NO_SDK) onReward();
+    else if (onFail) onFail();
     return;
   }
 
+  let rewarded = false;
+  let closed = false;
+
+  const finish = () => {
+    if (closed) return;
+    closed = true;
+    adEnd();
+    if (rewarded) onReward();
+    else if (onFail) onFail();
+  };
+
   adStart();
-  btnRevive.disabled = true;
 
   try {
     ysdk.adv.showRewardedVideo({
       callbacks: {
         onOpen: () => {},
-        onRewarded: () => {
-          onRewardedCallback();
-        },
-        onClose: () => {
-          btnRevive.disabled = false;
-          adEnd();
-        },
-        onError: (e) => {
-          console.warn('Erro ao reproduzir rewarded video:', e);
-          btnRevive.disabled = false;
-          adEnd();
-        }
+        onRewarded: () => { rewarded = true; },
+        onClose: () => finish(),
+        onError: (e) => { console.warn('Erro no rewarded video:', e); finish(); }
       }
     });
   } catch (err) {
-    btnRevive.disabled = false;
-    adEnd();
+    finish();
   }
 }
 
 /* =========================================================================
-   PAUSE
+   PAUSE (aba oculta / janela sem foco)
    ========================================================================= */
 function pauseGame() {
   if (paused || over || isAdPlaying || !player) return;
   paused = true;
   pauseAudio();
+  gameplayStop();
   pauseModal.style.display = 'flex';
   pointerDownPos = null;
   hasMovedPointer = false;
@@ -893,6 +980,7 @@ function resumeGame() {
   paused = false;
   pauseModal.style.display = 'none';
   resumeAudio();
+  if (!over) gameplayStart();
   lastTime = performance.now();
 }
 
@@ -1267,6 +1355,7 @@ class Obstacle {
     this.y = y;
     this.h = 22;
 
+    // Vão bem aberto no início (52% da tela), reduzindo bem devagar
     const maxGap = Math.min(W * 0.52, 300);
     const minGap = Math.max(W * 0.30, 130);
     const shrink = Math.min(currentScore * 1.2, maxGap - minGap);
@@ -1278,6 +1367,7 @@ class Obstacle {
     this.absorbed = false;
     this.nearMissTriggered = false;
 
+    // Obstáculos complexos demoram bastante para aparecer
     const rand = Math.random();
     if (currentScore >= 15 && rand < 0.25) {
       this.type = 'moving';
@@ -1417,6 +1507,7 @@ const BLOCKED_KEYS = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'
 window.addEventListener('keydown', (e) => {
   initAudio();
 
+  // Pausado: qualquer tecla retoma
   if (paused) {
     if (BLOCKED_KEYS.includes(e.code)) e.preventDefault();
     resumeGame();
@@ -1424,9 +1515,11 @@ window.addEventListener('keydown', (e) => {
   }
   if (isAdPlaying) return;
 
+  // Impede a página de rolar com setas / espaço
   if (e.code.startsWith('Arrow')) e.preventDefault();
 
   if (over) {
+    // Espaço / Enter inicia a partida quando nenhum outro botão está focado
     if ((e.code === 'Space' || e.code === 'Enter') && !e.repeat &&
         shopModal.style.display !== 'flex' && tutorialModal.style.display !== 'flex') {
       const ae = document.activeElement;
@@ -1441,11 +1534,12 @@ window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (SHIFT_KEYS.includes(e.code)) {
     e.preventDefault();
-    if (!e.repeat) player.shift();
+    if (!e.repeat) player.shift();   // ignora repetição automática
   }
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
+// Arrastar move a nave de forma relativa; toque rápido apenas troca a cor
 window.addEventListener('pointerdown', (e) => {
   initAudio();
   if (e.target.closest('#mute-btn') || e.target.closest('#ui') || e.target.closest('#shop-modal') || e.target.closest('#tutorial-modal') || e.target.closest('#pause-modal')) return;
@@ -1491,6 +1585,7 @@ function spawnPowerupChance(yPos) {
 }
 
 function reset() {
+  // Tira o foco dos botões para o Espaço não "clicar" neles durante o jogo
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
 
   initAudio();
@@ -1519,6 +1614,12 @@ function reset() {
   paused = false;
   pauseModal.style.display = 'none';
 
+  btnRevive.disabled = false;
+  btnRevive.style.display = 'none';
+
+  lives = MAX_LIVES;
+  updateLivesUI();
+
   activePowerups.shield = false;
   activePowerups.magnetTimer = 0;
   activePowerups.slowmoTimer = 0;
@@ -1537,11 +1638,13 @@ function reset() {
   ui.style.opacity = '0';
   setTimeout(() => { if (!over) ui.style.display = 'none'; }, 200);
 
+  gameplayStart();
   lastTime = performance.now();
 }
 
+// Inicia uma rodada: intervalo (anúncio intersticial) a partir da 2ª partida
 function startRound() {
-  if (starting) return;
+  if (starting || !sdkReady) return;
   starting = true;
   btnPlay.disabled = true;
 
@@ -1552,7 +1655,6 @@ function startRound() {
     reset();
   };
 
-  // Exibe anúncio intersticial a partir da segunda rodada
   if (roundsPlayed > 0) {
     showYandexFullscreenAdv().then(go);
   } else {
@@ -1568,6 +1670,8 @@ function triggerGameOver() {
   playSound('crash');
   vibrate(60);
 
+  gameplayStop();
+
   const curColor = player.c === 0 ? colorA : colorB;
   for (let i = 0; i < 35; i++) {
     particles.push(new Particle(player.x, player.y, curColor, 1.6));
@@ -1580,7 +1684,10 @@ function triggerGameOver() {
   uiTitle.innerText = "GAME OVER";
   btnPlay.innerText = "PLAY AGAIN";
   
-  if (!hasRevived && score >= 2) {
+  // O botão de revive aparece sempre (1 vez por partida). Sem anúncio disponível,
+  // o clique mostra "AD NOT AVAILABLE" e o jogador NÃO revive.
+  if (!hasRevived && score >= 1) {
+    btnRevive.disabled = false;
     btnRevive.style.display = 'block';
   } else {
     btnRevive.style.display = 'none';
@@ -1590,20 +1697,34 @@ function triggerGameOver() {
   setTimeout(() => { ui.style.opacity = '1'; }, 10);
 }
 
-// Reviver assistindo anúncio recompensado do Yandex
+// Revive: o jogador PRECISA assistir ao anúncio recompensado até o fim
 btnRevive.onclick = (e) => {
   e.stopPropagation();
   initAudio();
-  showYandexRewardedVideo(() => {
-    revivePlayer();
-  });
+  if (isAdPlaying || btnRevive.disabled) return;
+
+  btnRevive.disabled = true;
+  showYandexRewardedVideo(
+    () => {                       // assistiu até o fim → revive
+      btnRevive.disabled = false;
+      revivePlayer();
+    },
+    () => {                       // falhou ou fechou antes de terminar → NÃO revive
+      btnRevive.disabled = false;
+      btnRevive.innerText = 'AD NOT AVAILABLE, TRY AGAIN';
+      setTimeout(() => { btnRevive.innerText = '▶ WATCH AD TO REVIVE'; }, 2500);
+    }
+  );
 };
 
 function revivePlayer() {
   hasRevived = true;
+  lives = MAX_LIVES;
+  updateLivesUI();
   btnRevive.style.display = 'none';
   over = false;
 
+  // Neutraliza as barreiras próximas sem removê-las do array
   obs.forEach(o => {
     if (o.y >= player.y - 200 && o.y <= player.y + 80) {
       o.absorbed = true;
@@ -1617,6 +1738,7 @@ function revivePlayer() {
   ui.style.opacity = '0';
   setTimeout(() => { if (!over) ui.style.display = 'none'; }, 200);
 
+  gameplayStart();
   lastTime = performance.now();
 }
 
@@ -1670,6 +1792,7 @@ function loop(currentTime) {
   }
 
   if (!over && player) {
+    // Velocidade horizontal calibrada
     const horizSpeed = (W * 0.95 / 60) * dt;
     if (keys['KeyA'] || keys['ArrowLeft']) player.targetX -= horizSpeed;
     if (keys['KeyD'] || keys['ArrowRight']) player.targetX += horizSpeed;
@@ -1688,6 +1811,7 @@ function loop(currentTime) {
     if (activePowerups.slowmoTimer > 0) activePowerups.slowmoTimer -= dt;
     updatePowerupUI();
 
+    // Velocidade calma: base 2.2px/frame, sobe 0.035 por ponto, teto de +2.6
     const baseSpeed = 2.2;
     const progression = Math.min(score * 0.035, 2.6);
     let speed = baseSpeed + progression;
@@ -1699,6 +1823,7 @@ function loop(currentTime) {
       o.update(speed, dt);
       o.draw();
 
+      // Só pontua quando a barreira já saiu completamente da área da nave
       if (!o.passed && !o.absorbed && o.y > player.y + player.r) {
         o.passed = true;
         score++;
@@ -1715,4 +1840,177 @@ function loop(currentTime) {
           const distToRightEdge = Math.abs((player.x + player.r) - (o.gx + o.g));
           if (distToLeftEdge < 8 || distToRightEdge < 8) {
             o.nearMissTriggered = true;
-            score +=
+            score += 2;
+            scoreEl.innerText = score;
+            popTexts.push(new PopText(player.x, player.y - 45, "CLOSE CALL! +2", "#ffd700"));
+            playSound('near-miss');
+            vibrate(20);
+          }
+        }
+
+        if (!inGap) {
+          if (o.c === player.c) {
+            o.absorbed = true;
+            o.passed = true;
+            comboCount++;
+            comboTimer = COMBO_DURATION;
+            const comboBonus = comboCount * 2;
+            score += comboBonus;
+            scoreEl.innerText = score;
+
+            comboEl.innerText = `COMBO x${comboCount}!`;
+            comboEl.className = 'combo-badge active';
+
+            playSound('absorb');
+            vibrate(30);
+            screenShake = 5;
+            rings.push(new RingEffect(player.x, player.y, player.c === 0 ? colorA : colorB, 70));
+            popTexts.push(new PopText(player.x, player.y - 30, `ABSORB +${comboBonus}!`, player.c === 0 ? colorA : colorB));
+
+            for (let p = 0; p < 14; p++) {
+              particles.push(new Particle(player.x, player.y, player.c === 0 ? colorA : colorB, 1.4));
+            }
+          } else {
+            if (activePowerups.shield) {
+              activePowerups.shield = false;
+              player.invulnerableTimer = 60;
+              screenShake = 12;
+              vibrate(40);
+              playSound('shield-break');
+              rings.push(new RingEffect(player.x, player.y, '#00f0ff'));
+              popTexts.push(new PopText(player.x, player.y - 30, "SHIELD BROKEN!", "#00f0ff"));
+              o.y = H + 100;
+            } else {
+              lives--;
+              updateLivesUI();
+              if (lives <= 0) {
+                triggerGameOver();
+                break;
+              }
+              // Ainda há vidas: perde 1, fica invulnerável por um instante
+              player.invulnerableTimer = 90;
+              screenShake = 12;
+              vibrate(40);
+              playSound('shield-break');
+              rings.push(new RingEffect(player.x, player.y, colorB));
+              popTexts.push(new PopText(player.x, player.y - 30, "-1 ❤️", colorB));
+              o.y = H + 100;
+            }
+          }
+        }
+      }
+
+      if (o.y > H + 50) {
+        const sp = obsSpacing();
+        const highestObsY = Math.min(...obs.map(item => item.y));
+        const newY = highestObsY - sp;
+        o.y = newY;
+
+        const maxGap = Math.min(W * 0.52, 300);
+        const minGap = Math.max(W * 0.30, 130);
+        const shrink = Math.min(score * 1.2, maxGap - minGap);
+        o.g = Math.max(maxGap - shrink, minGap);
+
+        o.gx = Math.random() * (W - o.g - 40) + 20;
+        o.c = Math.random() > 0.5 ? 0 : 1;
+        o.passed = false;
+        o.absorbed = false;
+        o.nearMissTriggered = false;
+
+        const rand = Math.random();
+        if (score >= 15 && rand < 0.25) {
+          o.type = 'moving';
+          const baseMoveFrac = 0.08 + Math.min(score * 0.002, 0.08);
+          o.moveSpeed = (Math.random() > 0.5 ? 1 : -1) * (W * baseMoveFrac / 60);
+        } else if (score >= 25 && rand < 0.45) {
+          o.type = 'pulsing';
+          o.pulseTimer = 0;
+          o.pulseInterval = 100;
+        } else {
+          o.type = 'standard';
+        }
+
+        if (Math.random() > 0.35) {
+          gems.push(new Gem(newY + (sp * 0.5)));
+        }
+        spawnPowerupChance(newY + (sp * 0.75));
+      }
+    }
+
+    if (!over) {
+      powerupItems.forEach(item => {
+        item.update(speed, dt);
+        item.draw();
+
+        const dist = Math.hypot(item.x - player.x, item.y - player.y);
+        if (!item.collected && dist < player.r + item.r + 6) {
+          item.collected = true;
+          playSound('powerup');
+          vibrate(25);
+          rings.push(new RingEffect(item.x, item.y, item.color));
+
+          if (item.type === 'shield') {
+            activePowerups.shield = true;
+            popTexts.push(new PopText(item.x, item.y, "+SHIELD 🛡️", item.color));
+          } else if (item.type === 'magnet') {
+            activePowerups.magnetTimer = activePowerups.magnetMax;
+            popTexts.push(new PopText(item.x, item.y, "+MAGNET 🧲", item.color));
+          } else if (item.type === 'slowmo') {
+            activePowerups.slowmoTimer = activePowerups.slowmoMax;
+            popTexts.push(new PopText(item.x, item.y, "+SLOW ⏱", item.color));
+          }
+
+          for (let i = 0; i < 12; i++) {
+            particles.push(new Particle(item.x, item.y, item.color, 1.2));
+          }
+        }
+      });
+      powerupItems = powerupItems.filter(i => !i.collected && i.y < H + 50);
+
+      gems.forEach(gem => {
+        gem.update(speed, dt, player.x, player.y);
+        gem.draw();
+
+        const dist = Math.hypot(gem.x - player.x, gem.y - player.y);
+        if (!gem.collected && dist < player.r + gem.r + 6) {
+          gem.collected = true;
+          totalGems++;
+          gemsEl.innerText = totalGems;
+          store.setItem('neon_shift_gems', totalGems);
+          playSound('gem');
+          vibrate(15);
+          popTexts.push(new PopText(gem.x, gem.y, "+💎", colorGem));
+          for (let i = 0; i < 8; i++) {
+            particles.push(new Particle(gem.x, gem.y, colorGem, 1));
+          }
+        }
+      });
+      gems = gems.filter(g => !g.collected && g.y < H + 50);
+
+      player.draw();
+    }
+  }
+
+  rings.forEach(r => { r.update(dt); r.draw(); });
+  rings = rings.filter(r => r.alpha > 0);
+
+  particles.forEach(p => { p.update(dt); p.draw(); });
+  particles = particles.filter(p => p.alpha > 0);
+
+  popTexts.forEach(pt => { pt.update(dt); pt.draw(); });
+  popTexts = popTexts.filter(pt => pt.alpha > 0);
+
+  if (screenFlash > 0) {
+    ctx.fillStyle = `rgba(255, 0, 106, ${screenFlash})`;
+    ctx.fillRect(0, 0, W, H);
+    screenFlash -= 0.03 * dt;
+  }
+
+  ctx.restore();
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
